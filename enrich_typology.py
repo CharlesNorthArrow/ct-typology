@@ -184,7 +184,6 @@ dx = h3_x[:, None] - jc_x[None, :]
 dy = h3_y[:, None] - jc_y[None, :]
 dist_km = np.sqrt(dx**2 + dy**2).min(axis=1) / 1000.0
 
-dist_series = pd.Series(dist_km, index=centroids_proj.index)
 dist_df = pd.DataFrame({"h3_index": centroids_proj["h3_index"].values, "dist_job_center_km": dist_km})
 gdf = gdf.merge(dist_df, on="h3_index", how="left")
 print(f"      Distance range: {dist_km.min():.2f} km to {dist_km.max():.2f} km")
@@ -218,7 +217,8 @@ print(f"    Q2 / 50th pct:  {mf_q50:.4f}  ({mf_q50*100:.1f}%)")
 print(f"    Q3 / 75th pct:  {mf_q75:.4f}  ({mf_q75*100:.1f}%)")
 print("--- END METHODOLOGY LOG ---\n")
 
-JOB_DIST_CUTOFF = 20.0  # km
+NEAR_KM = 1.0 * 1.60934   # 1 mile — urban_core distance supplement
+FAR_KM  = 10.0 * 1.60934  # 10 miles — suburban / rural boundary
 
 def classify(row):
     pop  = row["pop_total"]
@@ -226,7 +226,7 @@ def classify(row):
     dist = row["dist_job_center_km"]
 
     if pop < 1:
-        return "uninhabited"
+        return "rural"  # uninhabited cells merged into rural
 
     in_top_q    = pop >= pop_q75
     in_2nd_q    = (pop >= pop_q50) and (pop < pop_q75)
@@ -234,15 +234,14 @@ def classify(row):
     in_bottom_q = pop < pop_q25
 
     # Priority: urban_core > dense_suburban > suburban > rural
-    if in_top_q and mf > 0.50:
+    if in_top_q and (mf > 0.50 or dist < NEAR_KM):
         return "urban_core"
     if in_2nd_q or (in_top_q and 0.25 <= mf <= 0.50):
         return "dense_suburban"
-    if in_3rd_q or dist < JOB_DIST_CUTOFF:
+    if in_3rd_q or dist < FAR_KM:
         return "suburban"
-    if in_bottom_q and dist >= JOB_DIST_CUTOFF:
+    if in_bottom_q and dist >= FAR_KM:
         return "rural"
-    # Residual (top-quartile, mf < 25%, dist >= 20 km) → suburban
     return "suburban"
 
 gdf["urban_type"] = gdf.apply(classify, axis=1)
@@ -282,22 +281,21 @@ def classify_v2(row):
     mf   = row["multifamily_pct"] if pd.notna(row["multifamily_pct"]) else 0.0
     dist = row["dist_job_center_km"]
 
-    # Lock uninhabited based on raw pop_total (hard rule)
     if row["pop_total"] < 1:
-        return "uninhabited"
+        return "rural"  # uninhabited cells merged into rural
 
     in_top_q    = pop >= ps_q75
     in_2nd_q    = (pop >= ps_q50) and (pop < ps_q75)
     in_3rd_q    = (pop >= ps_q25) and (pop < ps_q50)
     in_bottom_q = pop < ps_q25
 
-    if in_top_q and mf > 0.50:
+    if in_top_q and (mf > 0.50 or dist < NEAR_KM):
         return "urban_core"
     if in_2nd_q or (in_top_q and 0.25 <= mf <= 0.50):
         return "dense_suburban"
-    if in_3rd_q or dist < JOB_DIST_CUTOFF:
+    if in_3rd_q or dist < FAR_KM:
         return "suburban"
-    if in_bottom_q and dist >= JOB_DIST_CUTOFF:
+    if in_bottom_q and dist >= FAR_KM:
         return "rural"
     return "suburban"
 
@@ -306,7 +304,7 @@ gdf["urban_type_v2"] = gdf.apply(classify_v2, axis=1)
 # Step C: Majority filter — 2 rounds, uninhabited locked
 from collections import Counter
 
-PRIORITY = {"urban_core": 4, "dense_suburban": 3, "suburban": 2, "rural": 1, "uninhabited": 0}
+PRIORITY = {"urban_core": 4, "dense_suburban": 3, "suburban": 2, "rural": 1}
 
 def count_islands(df):
     h3_map = dict(zip(df["h3_index"], df["urban_type_v2"]))
@@ -327,9 +325,6 @@ for round_num in range(2):
     h3_to_type = dict(zip(gdf["h3_index"], gdf["urban_type_v2"]))
     new_types = []
     for _, row in gdf.iterrows():
-        if row["pop_total"] < 1:
-            new_types.append("uninhabited")
-            continue
         ring = h3.grid_ring(row["h3_index"], 1)
         neighbor_types = [h3_to_type[n] for n in ring if n in h3_to_type]
         if not neighbor_types:
@@ -337,7 +332,7 @@ for round_num in range(2):
             continue
         counts_nb = Counter(neighbor_types)
         top_type, top_count = counts_nb.most_common(1)[0]
-        # Reclassify if 4+ of 6 neighbors agree on a different type
+        # Reclassify if 4+ of 6 neighbors agree on a different type (no pop lock — lets isolated parks/rivers absorb into surrounding type)
         if top_count >= 4 and top_type != row["urban_type_v2"]:
             new_types.append(top_type)
         else:
@@ -350,7 +345,7 @@ gdf = gdf.drop(columns=["pop_smooth"])  # working column, not a deliverable
 
 print("\nUrban type distribution comparison (v1 vs v2):")
 print(f"  {'Type':<18} {'v1':>8} {'v2':>8}")
-for label in ["urban_core", "dense_suburban", "suburban", "rural", "uninhabited"]:
+for label in ["urban_core", "dense_suburban", "suburban", "rural"]:
     n1 = (gdf["urban_type"] == label).sum()
     n2 = (gdf["urban_type_v2"] == label).sum()
     print(f"  {label:<18} {n1:>8,} {n2:>8,}")

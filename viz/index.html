@@ -45,16 +45,21 @@
     }
     .layer-btn:hover  { background:#f2f8ee; border-color:#a9dadc; }
     .layer-btn.active { background:#1c3557; color:#f2f8ee; font-weight:600; }
-    #boundary-btn {
-      width:100%; background:white; border:1px solid transparent;
-      border-radius:8px; padding:8px 12px;
-      font-family:'Open Sans',sans-serif; font-size:.78rem; color:#1c3557;
-      cursor:pointer; text-align:left;
+    #overlay-group {
+      background:white; border-radius:8px; padding:10px 12px;
       box-shadow:0 2px 8px rgba(28,53,87,.15);
-      transition:background .12s, border-color .12s;
+      display:flex; flex-direction:column; gap:4px;
     }
-    #boundary-btn:hover  { background:#f2f8ee; border-color:#a9dadc; }
-    #boundary-btn.active { background:#1c3557; color:#f2f8ee; font-weight:600; }
+    #overlay-group .panel-label { margin-bottom:2px; }
+    .overlay-btn {
+      background:none; border:1px solid transparent; border-radius:4px;
+      padding:4px 8px; font-family:'Open Sans',sans-serif; font-size:.78rem;
+      color:#1c3557; cursor:pointer; text-align:left;
+      transition:background .12s, border-color .12s; width:100%;
+    }
+    .overlay-btn:hover  { background:#f2f8ee; border-color:#a9dadc; }
+    .overlay-btn.active { background:#1c3557; color:#f2f8ee; font-weight:600; }
+    .overlay-btn.school-btn.active { background:#e63947; border-color:#e63947; }
     #legend-title { font-family:'Poppins',sans-serif; font-weight:600; font-size:.78rem; margin-bottom:8px; }
     .swatch-row   { display:flex; align-items:center; gap:7px; margin-bottom:4px; }
     .swatch       { width:14px; height:14px; border-radius:3px; flex-shrink:0; }
@@ -130,7 +135,11 @@
       <div class="panel-label">View by</div>
       <div id="layer-buttons"></div>
     </div>
-    <button id="boundary-btn">□ Municipal Boundaries</button>
+    <div id="overlay-group">
+      <div class="panel-label">Overlay</div>
+      <button id="towns-btn" class="overlay-btn">□ Town Boundaries</button>
+      <button id="school-btn" class="overlay-btn school-btn">□ School Districts</button>
+    </div>
     <div class="panel">
       <div id="legend-title"></div>
       <div id="legend-body"></div>
@@ -165,25 +174,25 @@
         <h3>Urban Typology — Original</h3>
         <p>Each H3 cell classified independently using three variables and CT-specific quartile thresholds:</p>
         <ul>
-          <li><strong>Urban Core:</strong> Pop ≥ Q3 (218) and multifamily ≥ Q3 (19.5%) or within 5 km of an employment center</li>
-          <li><strong>Dense Suburban:</strong> Pop ≥ Q2 (74) and multifamily ≥ Q2 (8.9%) or within 20 km</li>
-          <li><strong>Suburban:</strong> Pop ≥ Q1 (22) and within 20 km of an employment center</li>
-          <li><strong>Rural:</strong> Population ≥ 1, not meeting urban thresholds</li>
-          <li><strong>Uninhabited:</strong> WorldPop estimate &lt; 1 person</li>
+          <li><strong>Urban Core:</strong> Pop ≥ Q3 and multifamily ≥ Q3 (19.4%), or within 1 mile of an employment center</li>
+          <li><strong>Dense Suburban:</strong> Pop in 2nd quartile, or top-quartile with multifamily 25–50%</li>
+          <li><strong>Suburban:</strong> Pop in 3rd quartile, or within 10 miles of an employment center</li>
+          <li><strong>Rural:</strong> All remaining cells, including those with WorldPop &lt; 1 person</li>
         </ul>
       </div>
       <div class="ms">
         <h3>Urban Typology — Rationalized</h3>
         <p>Same framework, applied to a neighborhood-smoothed population input: each cell's population is replaced by the mean of itself and its 6 k=1 ring neighbors before classification.</p>
-        <p>Two rounds of majority filter then applied: a cell is reclassified if ≥4 of its 6 ring-1 neighbors share a different type. Uninhabited cells are locked. This reduces isolated single-cell anomalies (islands: 99 → 44) and improves spatial continuity.</p>
+        <p>Two rounds of majority filter then applied: a cell is reclassified if ≥4 of its 6 ring-1 neighbors share a different type. No cells are locked — isolated parks, rivers, and other natural areas surrounded by urban cells are absorbed into the surrounding type. This reduces isolated anomalies and improves spatial continuity.</p>
       </div>
       <div class="ms">
         <h3>Book Access Infrastructure Index (BAII)</h3>
         <p>A composite index scoring physical infrastructure support for reaching library resources. Scored separately for personal vehicle (Car) and public transit (Transit). Higher values indicate greater access infrastructure quality. Developed by North Arrow for Read to Grow.</p>
       </div>
       <div class="ms">
-        <h3>Municipal Boundaries</h3>
-        <p>Connecticut county subdivisions (174 municipalities) from TIGER/Line 2022, simplified at 0.0005° tolerance. Each H3 cell is labeled with the municipality whose boundary contains its centroid; 274 water-adjacent edge cells are unlabeled.</p>
+        <h3>Boundary Overlays</h3>
+        <p>Town boundaries: Connecticut county subdivisions (174 municipalities) from TIGER/Line 2022. Each H3 cell is labeled with the municipality containing its centroid; water-adjacent edge cells may be unlabeled.</p>
+        <p>School districts: Connecticut unified school district boundaries from Census TIGERweb (114 districts).</p>
       </div>
     </div>
   </div>
@@ -203,19 +212,22 @@
 const LAYERS = [
   { id:'urban_type',         label:'Typology (Original)',     type:'cat', desc:'Per-cell classification using raw population density, multifamily share, and distance to employment centers.' },
   { id:'urban_type_v2',      label:'Typology (Rationalized)', type:'cat', desc:'Same framework with k=1 neighborhood-smoothed population and 2 rounds of majority filter to remove isolated cells.' },
-  { id:'baii_car',           label:'BAII — Car',              type:'num', desc:'Book-Access Infrastructure Index score, car mode.',                fmt: v => v==null?'N/A':v.toFixed(2) },
-  { id:'baii_pt',            label:'BAII — Transit',          type:'num', desc:'Book-Access Infrastructure Index score, transit mode.',            fmt: v => v==null?'N/A':v.toFixed(2) },
+  { id:'baii_car',           label:'BAII — Car',              type:'num', desc:'Book-Access Infrastructure Index score, car mode, normalized 0–100.',     fmt: v => v==null?'N/A':v.toFixed(1)+' / 100' },
+  { id:'baii_pt',            label:'BAII — Transit',          type:'num', desc:'Book-Access Infrastructure Index score, transit mode, normalized 0–100.',  fmt: v => v==null?'N/A':v.toFixed(1)+' / 100' },
   { id:'pop_total',          label:'Population',              type:'num', desc:'WorldPop model estimate per H3 cell (~0.74 km²).',                 fmt: v => v==null?'N/A':Math.round(v).toLocaleString() },
   { id:'multifamily_pct',    label:'Multifamily Housing',     type:'num', desc:'Share of housing units in 2+ unit structures (ACS B25024).',       fmt: v => v==null?'N/A':(v*100).toFixed(1)+'%' },
-  { id:'dist_job_center_km', label:'Dist. to Job Center',     type:'num', desc:'Euclidean km to nearest LODES employment center (top 10% jobs).',  fmt: v => v==null?'N/A':v.toFixed(1)+' km' },
+  { id:'dist_job_center_km', label:'Dist. to Job Center',     type:'num', desc:'Euclidean miles to nearest LODES employment center (top 10% jobs).', fmt: v => v==null?'N/A':(v/1.60934).toFixed(1)+' mi' },
 ]
 const BY_ID = Object.fromEntries(LAYERS.map(l=>[l.id,l]))
 
-const CAT_COLORS = { urban_core:'#7b2d8b', dense_suburban:'#e05c1a', suburban:'#f5c518', rural:'#3a9e5f', uninhabited:'#e0e0e0' }
-const CAT_LABELS = { urban_core:'Urban Core', dense_suburban:'Dense Suburban', suburban:'Suburban', rural:'Rural', uninhabited:'Uninhabited' }
+const CAT_COLORS = { urban_core:'#7b2d8b', dense_suburban:'#e05c1a', suburban:'#f5c518', rural:'#3a9e5f' }
+const CAT_LABELS = { urban_core:'Urban Core', dense_suburban:'Dense Suburban', suburban:'Suburban', rural:'Rural' }
 const SEQ = ['#f7fbff','#c6dbef','#6baed6','#2171b5','#084594']
+const DIV = ['#d73027','#fc8d59','#fee090','#91bfdb','#4575b4']
+const DIV_STOPS = [0, 25, 50, 75, 100]
+const BAII_IDS = new Set(['baii_car','baii_pt'])
 
-let activeField = 'urban_type', showBoundaries = false, fieldStats = {}, map
+let activeField = 'urban_type', showTowns = false, showSchools = false, fieldStats = {}, map
 
 function pct(sorted, p) {
   const i=p*(sorted.length-1), lo=Math.floor(i), hi=Math.ceil(i)
@@ -224,7 +236,9 @@ function pct(sorted, p) {
 
 function colorExpr(id) {
   if (id==='urban_type'||id==='urban_type_v2')
-    return ['match',['get',id],'urban_core',CAT_COLORS.urban_core,'dense_suburban',CAT_COLORS.dense_suburban,'suburban',CAT_COLORS.suburban,'rural',CAT_COLORS.rural,'uninhabited',CAT_COLORS.uninhabited,'#ccc']
+    return ['match',['get',id],'urban_core',CAT_COLORS.urban_core,'dense_suburban',CAT_COLORS.dense_suburban,'suburban',CAT_COLORS.suburban,'rural',CAT_COLORS.rural,'#ccc']
+  if (BAII_IDS.has(id))
+    return ['case',['==',['get',id],null],'#ccc',['interpolate',['linear'],['get',id],...DIV.flatMap((c,i)=>[DIV_STOPS[i],c])]]
   const s=fieldStats[id]; if(!s) return '#aaa'
   return ['case',['==',['get',id],null],'#ccc',['interpolate',['linear'],['get',id],...SEQ.flatMap((c,i)=>[s.q[i],c])]]
 }
@@ -238,6 +252,9 @@ function renderLegend() {
   if(layer.type==='cat') {
     body.innerHTML=Object.entries(CAT_COLORS).map(([v,c])=>
       `<div class="swatch-row"><span class="swatch" style="background:${c}"></span><span class="swatch-label">${CAT_LABELS[v]}</span></div>`).join('')
+  } else if(BAII_IDS.has(activeField)) {
+    body.innerHTML=`<div class="grad-bar" style="background:linear-gradient(to right,${DIV.join(',')})"></div>
+      <div class="grad-labels"><span>0</span><span>50 (mid)</span><span>100</span></div>`
   } else {
     const s=fieldStats[activeField]; if(!s) return
     body.innerHTML=`<div class="grad-bar" style="background:linear-gradient(to right,${SEQ.join(',')})"></div>
@@ -262,11 +279,17 @@ LAYERS.forEach(l=>{
   btnWrap.appendChild(b)
 })
 
-document.getElementById('boundary-btn').onclick=()=>{
-  showBoundaries=!showBoundaries
-  document.getElementById('boundary-btn').textContent=(showBoundaries?'▣':'□')+' Municipal Boundaries'
-  document.getElementById('boundary-btn').classList.toggle('active',showBoundaries)
-  if(map.getLayer('towns-line')) map.setLayoutProperty('towns-line','visibility',showBoundaries?'visible':'none')
+document.getElementById('towns-btn').onclick=()=>{
+  showTowns=!showTowns
+  document.getElementById('towns-btn').textContent=(showTowns?'▣':'□')+' Town Boundaries'
+  document.getElementById('towns-btn').classList.toggle('active',showTowns)
+  if(map.getLayer('towns-line')) map.setLayoutProperty('towns-line','visibility',showTowns?'visible':'none')
+}
+document.getElementById('school-btn').onclick=()=>{
+  showSchools=!showSchools
+  document.getElementById('school-btn').textContent=(showSchools?'▣':'□')+' School Districts'
+  document.getElementById('school-btn').classList.toggle('active',showSchools)
+  if(map.getLayer('school-districts-line')) map.setLayoutProperty('school-districts-line','visibility',showSchools?'visible':'none')
 }
 
 map=new maplibregl.Map({
@@ -304,19 +327,31 @@ map.on('load', async ()=>{
   const loadEl=document.getElementById('loading')
   try {
     loadEl.textContent='Fetching data…'
-    const [geojsonResp, townsResp] = await Promise.all([
+    const [geojsonResp, townsResp, schoolResp] = await Promise.all([
       fetch('public/ct_h3.geojson'),
-      fetch('public/ct_towns.geojson')
+      fetch('public/ct_towns.geojson'),
+      fetch('public/ct_school_districts.geojson')
     ])
     if(!geojsonResp.ok) throw new Error('ct_h3.geojson: '+geojsonResp.status)
     if(!townsResp.ok)   throw new Error('ct_towns.geojson: '+townsResp.status)
+    if(!schoolResp.ok)  throw new Error('ct_school_districts.geojson: '+schoolResp.status)
 
     loadEl.textContent='Parsing data…'
-    const [geojson, towns] = await Promise.all([geojsonResp.json(), townsResp.json()])
+    const [geojson, towns, schools] = await Promise.all([geojsonResp.json(), townsResp.json(), schoolResp.json()])
 
-    // Compute quantile stats from feature properties
+    // Normalize baii fields to 0–100 (min-max)
+    BAII_IDS.forEach(f=>{
+      const vals=geojson.features.map(ft=>ft.properties[f]).filter(v=>v!=null)
+      const min=vals.reduce((a,b)=>b<a?b:a, Infinity)
+      const max=vals.reduce((a,b)=>b>a?b:a, -Infinity)
+      const range=max-min||1
+      geojson.features.forEach(ft=>{ if(ft.properties[f]!=null) ft.properties[f]=((ft.properties[f]-min)/range)*100 })
+    })
+
+    // Compute quantile stats; baii fields get fixed 0-100 stops
     const numFields=['baii_car','baii_pt','pop_total','multifamily_pct','dist_job_center_km']
     numFields.forEach(f=>{
+      if(BAII_IDS.has(f)) { fieldStats[f]={ q:[0,25,50,75,100] }; return }
       const vals=geojson.features.map(ft=>ft.properties[f]).filter(v=>v!=null).sort((a,b)=>a-b)
       fieldStats[f]={ q:[0,.25,.5,.75,1].map(p=>pct(vals,p)) }
     })
@@ -324,16 +359,24 @@ map.on('load', async ()=>{
     loadEl.textContent='Rendering…'
     await new Promise(r=>setTimeout(r,0))
 
+    const NOT_WATER = ['!=', ['get', 'is_water'], true]
     map.addSource('hexagons',{ type:'geojson', data:geojson })
     map.addLayer({ id:'hexagons-fill', type:'fill', source:'hexagons',
+      filter: NOT_WATER,
       paint:{ 'fill-color':colorExpr(activeField), 'fill-opacity':0.75 } })
     map.addLayer({ id:'hexagons-line', type:'line', source:'hexagons',
+      filter: NOT_WATER,
       paint:{ 'line-color':'rgba(255,255,255,0.25)', 'line-width':0.3 } })
 
     map.addSource('towns',{ type:'geojson', data:towns })
     map.addLayer({ id:'towns-line', type:'line', source:'towns',
       layout:{ visibility:'none' },
       paint:{ 'line-color':'#1c3557', 'line-width':1.2, 'line-opacity':0.8 } })
+
+    map.addSource('school-districts',{ type:'geojson', data:schools })
+    map.addLayer({ id:'school-districts-line', type:'line', source:'school-districts',
+      layout:{ visibility:'none' },
+      paint:{ 'line-color':'#e63947', 'line-width':1.5, 'line-opacity':0.8 } })
 
     map.on('mousemove','hexagons-fill', e=>{
       if(!e.features.length) return
