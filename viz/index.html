@@ -118,6 +118,59 @@
       display:none;
     }
     #method-tab:hover { color:#1c3557; }
+
+    /* ── Compare mode ── */
+    #compare-btn {
+      margin-left:auto; background:rgba(255,255,255,0.15);
+      border:1px solid rgba(255,255,255,0.35); border-radius:5px;
+      color:#f2f8ee; font-family:'Open Sans',sans-serif; font-size:.75rem;
+      font-weight:600; padding:5px 12px; cursor:pointer;
+      transition:background .15s;
+    }
+    #compare-btn:hover  { background:rgba(255,255,255,0.28); }
+    #compare-btn.active { background:#a9dadc; color:#1c3557; border-color:#a9dadc; }
+    #map-5ct {
+      position:absolute; top:0; left:0; bottom:0; width:50%;
+      z-index:2; display:none;
+    }
+    #compare-slider {
+      position:absolute; top:0; bottom:0; left:50%;
+      width:44px; margin-left:-22px;
+      z-index:4; cursor:col-resize;
+      align-items:center; justify-content:center; display:none;
+    }
+    #compare-slider::after {
+      content:''; position:absolute; top:0; bottom:0;
+      left:50%; width:3px; margin-left:-1.5px;
+      background:white; box-shadow:0 0 8px rgba(0,0,0,.3);
+      pointer-events:none;
+    }
+    #compare-handle {
+      position:relative; z-index:1; pointer-events:none;
+      background:white; border-radius:50%;
+      width:36px; height:36px; flex-shrink:0;
+      display:flex; align-items:center; justify-content:center;
+      box-shadow:0 2px 8px rgba(0,0,0,.25);
+      font-size:15px; color:#1c3557;
+    }
+    .compare-label {
+      position:absolute; top:12px; z-index:5; display:none;
+      background:rgba(28,53,87,0.82); color:#f2f8ee;
+      padding:5px 11px; border-radius:4px;
+      font-family:'Poppins',sans-serif; font-size:.7rem; font-weight:600;
+      pointer-events:none; white-space:nowrap;
+    }
+    #label-5ct { left:12px; }
+    #label-h3  { left:52%; }
+    #compare-legend {
+      position:absolute; bottom:32px; left:16px;
+      z-index:5; display:none;
+      background:white; border-radius:8px; padding:10px 12px;
+      box-shadow:0 2px 8px rgba(28,53,87,.15); min-width:190px;
+    }
+    #map-wrap.compare-active #sidebar { left:auto; right:16px; }
+    #map-wrap.compare-active #method-panel { display:none; }
+    #map-wrap.compare-active #method-tab  { display:none !important; }
   </style>
 </head>
 <body>
@@ -125,9 +178,18 @@
 <div id="header">
   <span id="header-title">CT Book Access — Urban Typology</span>
   <span id="header-sub">H3 Resolution 8 · Connecticut · North Arrow for Read to Grow</span>
+  <button id="compare-btn">↔ Compare 5CT</button>
 </div>
 
 <div id="map-wrap">
+  <div id="map-5ct"></div>
+  <div id="compare-slider"><div id="compare-handle">↔</div></div>
+  <div class="compare-label" id="label-5ct">Five Connecticuts 2010</div>
+  <div class="compare-label" id="label-h3">BAII Typology</div>
+  <div id="compare-legend">
+    <div class="panel-label">Five Connecticuts 2010</div>
+    <div id="compare-legend-body"></div>
+  </div>
   <div id="map"></div>
   <div id="loading">Loading map data…</div>
   <div id="sidebar">
@@ -229,6 +291,17 @@ const BAII_IDS = new Set(['baii_car','baii_pt'])
 
 let activeField = 'urban_type', showTowns = false, showSchools = false, fieldStats = {}, map
 
+const CT5_COLORS = {
+  'Urban core':      '#7b2d8b',
+  'Urban periphery': '#e05c1a',
+  'Suburban':        '#f5c518',
+  'Wealthy':         '#2c7bb6',
+  'Rural':           '#3a9e5f',
+}
+const CT5_ORDER = ['Urban core','Urban periphery','Suburban','Wealthy','Rural']
+
+let map5ct = null, compareActive = false, isDragging = false, splitPct = 50
+
 function pct(sorted, p) {
   const i=p*(sorted.length-1), lo=Math.floor(i), hi=Math.ceil(i)
   return sorted[lo]+(sorted[hi]-sorted[lo])*(i-lo)
@@ -291,6 +364,123 @@ document.getElementById('school-btn').onclick=()=>{
   document.getElementById('school-btn').classList.toggle('active',showSchools)
   if(map.getLayer('school-districts-line')) map.setLayoutProperty('school-districts-line','visibility',showSchools?'visible':'none')
 }
+
+// ── Compare / 5CT ─────────────────────────────────────────────────────────────
+function ct5ColorExpr() {
+  return ['match',['get','five_ct'],
+    'Urban core',CT5_COLORS['Urban core'],
+    'Urban periphery',CT5_COLORS['Urban periphery'],
+    'Suburban',CT5_COLORS['Suburban'],
+    'Wealthy',CT5_COLORS['Wealthy'],
+    'Rural',CT5_COLORS['Rural'],
+    '#cccccc']
+}
+
+function render5ctLegend() {
+  document.getElementById('compare-legend-body').innerHTML =
+    CT5_ORDER.map(v=>
+      `<div class="swatch-row"><span class="swatch" style="background:${CT5_COLORS[v]}"></span><span class="swatch-label">${v}</span></div>`
+    ).join('')
+}
+
+function setSplit(pct) {
+  splitPct = Math.max(10, Math.min(90, pct))
+  const mapEl = document.getElementById('map-5ct')
+  const sliderEl = document.getElementById('compare-slider')
+  const labelH3 = document.getElementById('label-h3')
+  mapEl.style.width = splitPct + '%'
+  sliderEl.style.left = splitPct + '%'
+  labelH3.style.left = (splitPct + 2) + '%'
+  if (map5ct) map5ct.resize()
+}
+
+async function initCompareMap() {
+  if (map5ct) return
+  const basemapSources = {
+    basemap: {
+      type:'raster',
+      tiles:[
+        'https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png',
+        'https://b.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png',
+        'https://c.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png'
+      ],
+      tileSize:256,
+      attribution:'© OpenStreetMap contributors © CARTO'
+    }
+  }
+  map5ct = new maplibregl.Map({
+    container:'map-5ct',
+    style:{ version:8, sources:basemapSources, layers:[{ id:'basemap-layer', type:'raster', source:'basemap' }] },
+    center:map.getCenter(), zoom:map.getZoom(),
+    bearing:map.getBearing(), pitch:map.getPitch(),
+  })
+
+  let syncing = false
+  map5ct.on('move', ()=>{
+    if (syncing) return; syncing=true
+    map.jumpTo({ center:map5ct.getCenter(), zoom:map5ct.getZoom(), bearing:map5ct.getBearing(), pitch:map5ct.getPitch() })
+    syncing=false
+  })
+  map.on('move', ()=>{
+    if (syncing) return; syncing=true
+    map5ct.jumpTo({ center:map.getCenter(), zoom:map.getZoom(), bearing:map.getBearing(), pitch:map.getPitch() })
+    syncing=false
+  })
+
+  await new Promise(resolve => map5ct.on('load', resolve))
+
+  const resp = await fetch('public/ct_5ct.geojson')
+  if (!resp.ok) throw new Error('ct_5ct.geojson: '+resp.status)
+  const ct5data = await resp.json()
+
+  map5ct.addSource('ct5',{ type:'geojson', data:ct5data })
+  map5ct.addLayer({ id:'ct5-fill', type:'fill', source:'ct5',
+    filter:['!=',['get','five_ct'],'Unknown'],
+    paint:{ 'fill-color':ct5ColorExpr(), 'fill-opacity':0.8 } })
+  map5ct.addLayer({ id:'ct5-line', type:'line', source:'ct5',
+    paint:{ 'line-color':'rgba(255,255,255,0.6)', 'line-width':0.8 } })
+}
+
+async function toggleCompare() {
+  compareActive = !compareActive
+  const btn = document.getElementById('compare-btn')
+  const wrap = document.getElementById('map-wrap')
+  const els = ['map-5ct','compare-slider','label-5ct','label-h3','compare-legend']
+
+  if (compareActive) {
+    btn.textContent = '✕ Close Compare'
+    btn.classList.add('active')
+    document.getElementById('map-5ct').style.display = 'block'
+    document.getElementById('compare-slider').style.display = 'flex'
+    document.getElementById('label-5ct').style.display = 'block'
+    document.getElementById('label-h3').style.display = 'block'
+    document.getElementById('compare-legend').style.display = 'block'
+    wrap.classList.add('compare-active')
+    setSplit(50)
+    render5ctLegend()
+    await initCompareMap()
+  } else {
+    btn.textContent = '↔ Compare 5CT'
+    btn.classList.remove('active')
+    document.getElementById('map-5ct').style.display = 'none'
+    document.getElementById('compare-slider').style.display = 'none'
+    document.getElementById('label-5ct').style.display = 'none'
+    document.getElementById('label-h3').style.display = 'none'
+    document.getElementById('compare-legend').style.display = 'none'
+    wrap.classList.remove('compare-active')
+  }
+}
+
+const sliderEl = document.getElementById('compare-slider')
+sliderEl.addEventListener('mousedown', e=>{ isDragging=true; e.preventDefault() })
+document.addEventListener('mousemove', e=>{
+  if (!isDragging) return
+  const rect = document.getElementById('map-wrap').getBoundingClientRect()
+  setSplit((e.clientX - rect.left) / rect.width * 100)
+})
+document.addEventListener('mouseup', ()=>{ isDragging=false })
+document.getElementById('compare-btn').addEventListener('click', toggleCompare)
+// ─────────────────────────────────────────────────────────────────────────────
 
 map=new maplibregl.Map({
   container:'map',
