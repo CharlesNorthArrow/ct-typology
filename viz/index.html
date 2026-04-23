@@ -120,15 +120,16 @@
     #method-tab:hover { color:#1c3557; }
 
     /* ── Compare mode ── */
-    #compare-btn {
-      margin-left:auto; background:rgba(255,255,255,0.15);
-      border:1px solid rgba(255,255,255,0.35); border-radius:5px;
-      color:#f2f8ee; font-family:'Open Sans',sans-serif; font-size:.75rem;
-      font-weight:600; padding:5px 12px; cursor:pointer;
-      transition:background .15s;
+    .layer-row { display:flex; align-items:center; gap:3px; }
+    .layer-row .layer-btn { flex:1; }
+    .split-btn {
+      background:none; border:1px solid #a9dadc; border-radius:4px;
+      padding:3px 7px; font-family:'Open Sans',sans-serif; font-size:.7rem;
+      color:#467c9d; cursor:pointer; flex-shrink:0;
+      transition:background .12s, color .12s, border-color .12s;
     }
-    #compare-btn:hover  { background:rgba(255,255,255,0.28); }
-    #compare-btn.active { background:#a9dadc; color:#1c3557; border-color:#a9dadc; }
+    .split-btn:hover  { background:#f2f8ee; color:#1c3557; }
+    .split-btn.active { background:#1c3557; color:#f2f8ee; border-color:#1c3557; }
     #map-5ct {
       position:absolute; top:0; left:0; bottom:0; width:50%;
       z-index:2; display:none;
@@ -161,7 +162,7 @@
       pointer-events:none; white-space:nowrap;
     }
     #label-5ct { left:12px; }
-    #label-h3  { left:52%; }
+    #label-h3  { right:12px; left:auto; }
     #compare-legend {
       position:absolute; bottom:32px; left:16px;
       z-index:5; display:none;
@@ -178,14 +179,13 @@
 <div id="header">
   <span id="header-title">CT Book Access — Urban Typology</span>
   <span id="header-sub">H3 Resolution 8 · Connecticut · North Arrow for Read to Grow</span>
-  <button id="compare-btn">↔ Compare 5CT</button>
 </div>
 
 <div id="map-wrap">
   <div id="map-5ct"></div>
   <div id="compare-slider"><div id="compare-handle">↔</div></div>
   <div class="compare-label" id="label-5ct">Five Connecticuts 2010</div>
-  <div class="compare-label" id="label-h3">BAII Typology</div>
+  <div class="compare-label" id="label-h3">Rationalized Typology</div>
   <div id="compare-legend">
     <div class="panel-label">Five Connecticuts 2010</div>
     <div id="compare-legend-body"></div>
@@ -274,6 +274,7 @@
 const LAYERS = [
   { id:'urban_type',         label:'Typology (Original)',     type:'cat', desc:'Per-cell classification using raw population density, multifamily share, and distance to employment centers.' },
   { id:'urban_type_v2',      label:'Typology (Rationalized)', type:'cat', desc:'Same framework with k=1 neighborhood-smoothed population and 2 rounds of majority filter to remove isolated cells.' },
+  { id:'five_ct',            label:'Five Connecticuts 2010',  type:'ct5', desc:'DataHaven town-level typology (2010): Urban core, Urban periphery, Suburban, Wealthy, Rural.' },
   { id:'baii_car',           label:'BAII — Car',              type:'num', desc:'Book-Access Infrastructure Index score, car mode, normalized 0–100.',     fmt: v => v==null?'N/A':v.toFixed(1)+' / 100' },
   { id:'baii_pt',            label:'BAII — Transit',          type:'num', desc:'Book-Access Infrastructure Index score, transit mode, normalized 0–100.',  fmt: v => v==null?'N/A':v.toFixed(1)+' / 100' },
   { id:'pop_total',          label:'Population',              type:'num', desc:'WorldPop model estimate per H3 cell (~0.74 km²).',                 fmt: v => v==null?'N/A':Math.round(v).toLocaleString() },
@@ -300,7 +301,8 @@ const CT5_COLORS = {
 }
 const CT5_ORDER = ['Urban core','Urban periphery','Suburban','Wealthy','Rural']
 
-let map5ct = null, compareActive = false, isDragging = false, splitPct = 50
+let map5ct = null, ct5geojson = null, compareActive = false, isDragging = false, splitPct = 50
+let splitBtn = null
 
 function pct(sorted, p) {
   const i=p*(sorted.length-1), lo=Math.floor(i), hi=Math.ceil(i)
@@ -322,7 +324,10 @@ function renderLegend() {
   document.getElementById('legend-desc').textContent=layer.desc
   const body=document.getElementById('legend-body')
   body.innerHTML=''
-  if(layer.type==='cat') {
+  if(layer.type==='ct5') {
+    body.innerHTML=CT5_ORDER.map(v=>
+      `<div class="swatch-row"><span class="swatch" style="background:${CT5_COLORS[v]}"></span><span class="swatch-label">${v}</span></div>`).join('')
+  } else if(layer.type==='cat') {
     body.innerHTML=Object.entries(CAT_COLORS).map(([v,c])=>
       `<div class="swatch-row"><span class="swatch" style="background:${c}"></span><span class="swatch-label">${CAT_LABELS[v]}</span></div>`).join('')
   } else if(BAII_IDS.has(activeField)) {
@@ -338,18 +343,38 @@ function renderLegend() {
 function switchField(id) {
   activeField=id
   document.querySelectorAll('.layer-btn').forEach(b=>b.classList.toggle('active',b.dataset.id===id))
-  if(map.getLayer('hexagons-fill')) map.setPaintProperty('hexagons-fill','fill-color',colorExpr(id))
+  const is5ct = id==='five_ct'
+  if(map.getLayer('hexagons-fill')) {
+    map.setLayoutProperty('hexagons-fill','visibility', is5ct?'none':'visible')
+    map.setLayoutProperty('hexagons-line','visibility', is5ct?'none':'visible')
+  }
+  if(map.getLayer('ct5-fill-main')) {
+    map.setLayoutProperty('ct5-fill-main','visibility', is5ct?'visible':'none')
+    map.setLayoutProperty('ct5-line-main','visibility', is5ct?'visible':'none')
+  }
+  if(!is5ct && map.getLayer('hexagons-fill')) map.setPaintProperty('hexagons-fill','fill-color',colorExpr(id))
   renderLegend()
 }
 
 // Build layer toggle buttons
 const btnWrap=document.getElementById('layer-buttons')
 LAYERS.forEach(l=>{
+  const row=document.createElement('div')
+  row.className='layer-row'
   const b=document.createElement('button')
   b.className='layer-btn'+(l.id===activeField?' active':'')
   b.dataset.id=l.id; b.textContent=l.label
   b.onclick=()=>switchField(l.id)
-  btnWrap.appendChild(b)
+  row.appendChild(b)
+  if(l.id==='five_ct') {
+    splitBtn=document.createElement('button')
+    splitBtn.className='split-btn'
+    splitBtn.title='Split screen: Five Connecticuts vs Rationalized Typology'
+    splitBtn.textContent='⊟ Split'
+    splitBtn.onclick=e=>{ e.stopPropagation(); toggleCompare() }
+    row.appendChild(splitBtn)
+  }
+  btnWrap.appendChild(row)
 })
 
 document.getElementById('towns-btn').onclick=()=>{
@@ -385,12 +410,8 @@ function render5ctLegend() {
 
 function setSplit(pct) {
   splitPct = Math.max(10, Math.min(90, pct))
-  const mapEl = document.getElementById('map-5ct')
-  const sliderEl = document.getElementById('compare-slider')
-  const labelH3 = document.getElementById('label-h3')
-  mapEl.style.width = splitPct + '%'
-  sliderEl.style.left = splitPct + '%'
-  labelH3.style.left = (splitPct + 2) + '%'
+  document.getElementById('map-5ct').style.width = splitPct + '%'
+  document.getElementById('compare-slider').style.left = splitPct + '%'
   if (map5ct) map5ct.resize()
 }
 
@@ -429,11 +450,13 @@ async function initCompareMap() {
 
   await new Promise(resolve => map5ct.on('load', resolve))
 
-  const resp = await fetch('public/ct_5ct.geojson')
-  if (!resp.ok) throw new Error('ct_5ct.geojson: '+resp.status)
-  const ct5data = await resp.json()
+  if(!ct5geojson) {
+    const resp = await fetch('public/ct_5ct.geojson')
+    if (!resp.ok) throw new Error('ct_5ct.geojson: '+resp.status)
+    ct5geojson = await resp.json()
+  }
 
-  map5ct.addSource('ct5',{ type:'geojson', data:ct5data })
+  map5ct.addSource('ct5',{ type:'geojson', data:ct5geojson })
   map5ct.addLayer({ id:'ct5-fill', type:'fill', source:'ct5',
     filter:['!=',['get','five_ct'],'Unknown'],
     paint:{ 'fill-color':ct5ColorExpr(), 'fill-opacity':0.8 } })
@@ -443,13 +466,21 @@ async function initCompareMap() {
 
 async function toggleCompare() {
   compareActive = !compareActive
-  const btn = document.getElementById('compare-btn')
   const wrap = document.getElementById('map-wrap')
-  const els = ['map-5ct','compare-slider','label-5ct','label-h3','compare-legend']
 
   if (compareActive) {
-    btn.textContent = '✕ Close Compare'
-    btn.classList.add('active')
+    splitBtn.textContent = '✕ Split'
+    splitBtn.classList.add('active')
+    // Right side always shows urban_type_v2 in split mode
+    if(map.getLayer('hexagons-fill')) {
+      map.setLayoutProperty('hexagons-fill','visibility','visible')
+      map.setLayoutProperty('hexagons-line','visibility','visible')
+      map.setPaintProperty('hexagons-fill','fill-color',colorExpr('urban_type_v2'))
+    }
+    if(map.getLayer('ct5-fill-main')) {
+      map.setLayoutProperty('ct5-fill-main','visibility','none')
+      map.setLayoutProperty('ct5-line-main','visibility','none')
+    }
     document.getElementById('map-5ct').style.display = 'block'
     document.getElementById('compare-slider').style.display = 'flex'
     document.getElementById('label-5ct').style.display = 'block'
@@ -460,14 +491,16 @@ async function toggleCompare() {
     render5ctLegend()
     await initCompareMap()
   } else {
-    btn.textContent = '↔ Compare 5CT'
-    btn.classList.remove('active')
+    splitBtn.textContent = '⊟ Split'
+    splitBtn.classList.remove('active')
     document.getElementById('map-5ct').style.display = 'none'
     document.getElementById('compare-slider').style.display = 'none'
     document.getElementById('label-5ct').style.display = 'none'
     document.getElementById('label-h3').style.display = 'none'
     document.getElementById('compare-legend').style.display = 'none'
     wrap.classList.remove('compare-active')
+    // Restore whatever layer was active before
+    switchField(activeField)
   }
 }
 
@@ -479,7 +512,6 @@ document.addEventListener('mousemove', e=>{
   setSplit((e.clientX - rect.left) / rect.width * 100)
 })
 document.addEventListener('mouseup', ()=>{ isDragging=false })
-document.getElementById('compare-btn').addEventListener('click', toggleCompare)
 // ─────────────────────────────────────────────────────────────────────────────
 
 map=new maplibregl.Map({
@@ -517,17 +549,20 @@ map.on('load', async ()=>{
   const loadEl=document.getElementById('loading')
   try {
     loadEl.textContent='Fetching data…'
-    const [geojsonResp, townsResp, schoolResp] = await Promise.all([
+    const [geojsonResp, townsResp, schoolResp, ct5Resp] = await Promise.all([
       fetch('public/ct_h3.geojson'),
       fetch('public/ct_towns.geojson'),
-      fetch('public/ct_school_districts.geojson')
+      fetch('public/ct_school_districts.geojson'),
+      fetch('public/ct_5ct.geojson'),
     ])
     if(!geojsonResp.ok) throw new Error('ct_h3.geojson: '+geojsonResp.status)
     if(!townsResp.ok)   throw new Error('ct_towns.geojson: '+townsResp.status)
     if(!schoolResp.ok)  throw new Error('ct_school_districts.geojson: '+schoolResp.status)
+    if(!ct5Resp.ok)     throw new Error('ct_5ct.geojson: '+ct5Resp.status)
 
     loadEl.textContent='Parsing data…'
     const [geojson, towns, schools] = await Promise.all([geojsonResp.json(), townsResp.json(), schoolResp.json()])
+    ct5geojson = await ct5Resp.json()
 
     // Normalize baii fields to 0–100 (min-max)
     BAII_IDS.forEach(f=>{
@@ -567,6 +602,16 @@ map.on('load', async ()=>{
     map.addLayer({ id:'school-districts-line', type:'line', source:'school-districts',
       layout:{ visibility:'none' },
       paint:{ 'line-color':'#e63947', 'line-width':1.5, 'line-opacity':0.8 } })
+
+    // 5CT town layer — hidden by default, shown when five_ct is active
+    map.addSource('ct5-main',{ type:'geojson', data:ct5geojson })
+    map.addLayer({ id:'ct5-fill-main', type:'fill', source:'ct5-main',
+      filter:['!=',['get','five_ct'],'Unknown'],
+      layout:{ visibility:'none' },
+      paint:{ 'fill-color':ct5ColorExpr(), 'fill-opacity':0.8 } })
+    map.addLayer({ id:'ct5-line-main', type:'line', source:'ct5-main',
+      layout:{ visibility:'none' },
+      paint:{ 'line-color':'rgba(255,255,255,0.6)', 'line-width':0.8 } })
 
     map.on('mousemove','hexagons-fill', e=>{
       if(!e.features.length) return
