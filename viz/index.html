@@ -131,7 +131,7 @@
     .split-btn:hover  { background:#f2f8ee; color:#1c3557; }
     .split-btn.active { background:#1c3557; color:#f2f8ee; border-color:#1c3557; }
     #map-5ct {
-      position:absolute; top:0; left:0; bottom:0; width:50%;
+      position:absolute; inset:0;
       z-index:2; display:none;
     }
     #compare-slider {
@@ -410,13 +410,9 @@ function render5ctLegend() {
 
 function setSplit(pct) {
   splitPct = Math.max(10, Math.min(90, pct))
-  document.getElementById('map-5ct').style.width = splitPct + '%'
+  // Clip the 5CT map to the left portion; H3 map shows full-screen underneath
+  document.getElementById('map-5ct').style.clipPath = `inset(0 ${100 - splitPct}% 0 0)`
   document.getElementById('compare-slider').style.left = splitPct + '%'
-  document.getElementById('map').style.left = splitPct + '%'
-  requestAnimationFrame(() => {
-    if (map5ct) map5ct.resize()
-    map.resize()
-  })
 }
 
 async function initCompareMap() {
@@ -503,8 +499,6 @@ async function toggleCompare() {
     document.getElementById('label-h3').style.display = 'none'
     document.getElementById('compare-legend').style.display = 'none'
     wrap.classList.remove('compare-active')
-    document.getElementById('map').style.left = '0'
-    requestAnimationFrame(() => map.resize())
     // Restore whatever layer was active before
     switchField(activeField)
   }
