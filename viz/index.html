@@ -275,6 +275,7 @@ const LAYERS = [
   { id:'urban_type',         label:'Typology (Original)',     type:'cat', desc:'Per-cell classification using raw population density, multifamily share, and distance to employment centers.' },
   { id:'urban_type_v2',      label:'Typology (Rationalized)', type:'cat', desc:'Same framework with k=1 neighborhood-smoothed population and 2 rounds of majority filter to remove isolated cells.' },
   { id:'five_ct',            label:'Five Connecticuts 2010',  type:'ct5', desc:'DataHaven town-level typology (2010): Urban core, Urban periphery, Suburban, Wealthy, Rural.' },
+  { id:'pop_growth',         label:'Population Growth',       type:'growth', desc:'% population change by town: 2010 Decennial Census vs ACS 2023 5-year estimate.' },
   { id:'baii_car',           label:'BAII — Car',              type:'num', desc:'Book-Access Infrastructure Index score, car mode, normalized 0–100.',     fmt: v => v==null?'N/A':v.toFixed(1)+' / 100' },
   { id:'baii_pt',            label:'BAII — Transit',          type:'num', desc:'Book-Access Infrastructure Index score, transit mode, normalized 0–100.',  fmt: v => v==null?'N/A':v.toFixed(1)+' / 100' },
   { id:'pop_total',          label:'Population',              type:'num', desc:'WorldPop model estimate per H3 cell (~0.74 km²).',                 fmt: v => v==null?'N/A':Math.round(v).toLocaleString() },
@@ -324,6 +325,13 @@ function renderLegend() {
   document.getElementById('legend-desc').textContent=layer.desc
   const body=document.getElementById('legend-body')
   body.innerHTML=''
+  if(layer.type==='growth') {
+    body.innerHTML=`
+      <div class="swatch-row"><span style="color:#27ae60;font-size:1.1em;width:14px;text-align:center;flex-shrink:0">▲</span><span class="swatch-label">Population growth (larger = more)</span></div>
+      <div class="swatch-row"><span style="color:#e74c3c;font-size:1.1em;width:14px;text-align:center;flex-shrink:0">▼</span><span class="swatch-label">Population decline (larger = more)</span></div>
+      <div style="margin-top:6px;font-size:.68rem;color:#467c9d;line-height:1.4">ACS 2023 5-yr vs 2010 Decennial Census</div>`
+    return
+  }
   if(layer.type==='ct5') {
     body.innerHTML=CT5_ORDER.map(v=>
       `<div class="swatch-row"><span class="swatch" style="background:${CT5_COLORS[v]}"></span><span class="swatch-label">${v}</span></div>`).join('')
@@ -343,16 +351,20 @@ function renderLegend() {
 function switchField(id) {
   activeField=id
   document.querySelectorAll('.layer-btn').forEach(b=>b.classList.toggle('active',b.dataset.id===id))
-  const is5ct = id==='five_ct'
+  const is5ct   = id==='five_ct'
+  const isGrowth = id==='pop_growth'
+  const hideHex  = is5ct || isGrowth
   if(map.getLayer('hexagons-fill')) {
-    map.setLayoutProperty('hexagons-fill','visibility', is5ct?'none':'visible')
-    map.setLayoutProperty('hexagons-line','visibility', is5ct?'none':'visible')
+    map.setLayoutProperty('hexagons-fill','visibility', hideHex?'none':'visible')
+    map.setLayoutProperty('hexagons-line','visibility', hideHex?'none':'visible')
   }
   if(map.getLayer('ct5-fill-main')) {
     map.setLayoutProperty('ct5-fill-main','visibility', is5ct?'visible':'none')
     map.setLayoutProperty('ct5-line-main','visibility', is5ct?'visible':'none')
   }
-  if(!is5ct && map.getLayer('hexagons-fill')) map.setPaintProperty('hexagons-fill','fill-color',colorExpr(id))
+  if(map.getLayer('growth-symbols'))
+    map.setLayoutProperty('growth-symbols','visibility', isGrowth?'visible':'none')
+  if(!hideHex && map.getLayer('hexagons-fill')) map.setPaintProperty('hexagons-fill','fill-color',colorExpr(id))
   renderLegend()
 }
 
@@ -462,6 +474,25 @@ async function initCompareMap() {
     paint:{ 'fill-color':ct5ColorExpr(), 'fill-opacity':0.8 } })
   map5ct.addLayer({ id:'ct5-line', type:'line', source:'ct5',
     paint:{ 'line-color':'rgba(255,255,255,0.6)', 'line-width':0.8 } })
+
+  const tip = document.getElementById('tooltip')
+  map5ct.on('mousemove','ct5-fill', e=>{
+    if(!e.features.length) return
+    const p = e.features[0].properties
+    map5ct.getCanvas().style.cursor = 'pointer'
+    tip.style.display = 'block'
+    tip.style.left = (e.originalEvent.clientX + 14) + 'px'
+    tip.style.top  = (e.originalEvent.clientY - 10) + 'px'
+    document.getElementById('tooltip-type').textContent = p.five_ct || ''
+    const townEl = document.getElementById('tooltip-town')
+    townEl.textContent = p.NAME || ''
+    townEl.style.display = p.NAME ? 'block' : 'none'
+    document.getElementById('tooltip-rows').innerHTML = ''
+  })
+  map5ct.on('mouseleave','ct5-fill', ()=>{
+    map5ct.getCanvas().style.cursor = ''
+    tip.style.display = 'none'
+  })
 }
 
 async function toggleCompare() {
@@ -548,20 +579,32 @@ document.getElementById('method-tab').onclick=()=>{
 map.on('load', async ()=>{
   const loadEl=document.getElementById('loading')
   try {
+    // Helper: load an SVG string as a named MapLibre image
+    function loadSVGImage(name, svgStr) {
+      return new Promise((resolve, reject) => {
+        const img = new Image()
+        img.onload = () => { map.addImage(name, img); resolve() }
+        img.onerror = reject
+        img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgStr)
+      })
+    }
+
     loadEl.textContent='Fetching data…'
-    const [geojsonResp, townsResp, schoolResp, ct5Resp] = await Promise.all([
+    const [geojsonResp, townsResp, schoolResp, ct5Resp, growthResp] = await Promise.all([
       fetch('public/ct_h3.geojson'),
       fetch('public/ct_towns.geojson'),
       fetch('public/ct_school_districts.geojson'),
       fetch('public/ct_5ct.geojson'),
+      fetch('public/ct_pop_growth.geojson'),
     ])
     if(!geojsonResp.ok) throw new Error('ct_h3.geojson: '+geojsonResp.status)
     if(!townsResp.ok)   throw new Error('ct_towns.geojson: '+townsResp.status)
     if(!schoolResp.ok)  throw new Error('ct_school_districts.geojson: '+schoolResp.status)
-    if(!ct5Resp.ok)     throw new Error('ct_5ct.geojson: '+ct5Resp.status)
+    if(!ct5Resp.ok)    throw new Error('ct_5ct.geojson: '+ct5Resp.status)
+    if(!growthResp.ok) throw new Error('ct_pop_growth.geojson: '+growthResp.status)
 
     loadEl.textContent='Parsing data…'
-    const [geojson, towns, schools] = await Promise.all([geojsonResp.json(), townsResp.json(), schoolResp.json()])
+    const [geojson, towns, schools, growthData] = await Promise.all([geojsonResp.json(), townsResp.json(), schoolResp.json(), growthResp.json()])
     ct5geojson = await ct5Resp.json()
 
     // Normalize baii fields to 0–100 (min-max)
@@ -612,6 +655,49 @@ map.on('load', async ()=>{
     map.addLayer({ id:'ct5-line-main', type:'line', source:'ct5-main',
       layout:{ visibility:'none' },
       paint:{ 'line-color':'rgba(255,255,255,0.6)', 'line-width':0.8 } })
+
+    // Population growth triangle symbols
+    await Promise.all([
+      loadSVGImage('tri-up',
+        `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28"><polygon points="14,3 25,24 3,24" fill="#27ae60" stroke="white" stroke-width="1.5" stroke-linejoin="round"/></svg>`),
+      loadSVGImage('tri-down',
+        `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28"><polygon points="3,4 25,4 14,25" fill="#e74c3c" stroke="white" stroke-width="1.5" stroke-linejoin="round"/></svg>`),
+    ])
+    map.addSource('pop-growth', { type:'geojson', data:growthData })
+    map.addLayer({ id:'growth-symbols', type:'symbol', source:'pop-growth',
+      layout:{
+        visibility:'none',
+        'icon-image':['case',['>=',['get','pct_change'],0],'tri-up','tri-down'],
+        'icon-size':['interpolate',['linear'],['get','abs_pct'], 0,0.3, 5,0.45, 10,0.65, 20,0.9, 35,1.2],
+        'icon-allow-overlap':true,
+        'icon-ignore-placement':true,
+      }
+    })
+
+    map.on('mousemove','growth-symbols', e=>{
+      if(!e.features.length) return
+      const p = e.features[0].properties
+      map.getCanvas().style.cursor = 'pointer'
+      const tip = document.getElementById('tooltip')
+      tip.style.display = 'block'
+      tip.style.left = (e.originalEvent.clientX+14)+'px'
+      tip.style.top  = (e.originalEvent.clientY-10)+'px'
+      const sign = p.pct_change >= 0 ? '+' : ''
+      const arrow = p.pct_change >= 0 ? '▲' : '▼'
+      const col   = p.pct_change >= 0 ? '#27ae60' : '#e74c3c'
+      document.getElementById('tooltip-type').innerHTML =
+        `<span style="color:${col}">${arrow} ${sign}${p.pct_change}%</span>`
+      const townEl = document.getElementById('tooltip-town')
+      townEl.textContent = p.name; townEl.style.display = 'block'
+      document.getElementById('tooltip-rows').innerHTML =
+        `<tr><td class="k">2010 pop.</td><td class="v">${p.pop_2010.toLocaleString()}</td></tr>
+         <tr><td class="k">2023 est.</td><td class="v">${p.pop_2023.toLocaleString()}</td></tr>
+         <tr><td class="k">Change</td><td class="v" style="color:${col}">${sign}${p.pop_change.toLocaleString()}</td></tr>`
+    })
+    map.on('mouseleave','growth-symbols', ()=>{
+      map.getCanvas().style.cursor = ''
+      document.getElementById('tooltip').style.display = 'none'
+    })
 
     map.on('mousemove','hexagons-fill', e=>{
       if(!e.features.length) return
