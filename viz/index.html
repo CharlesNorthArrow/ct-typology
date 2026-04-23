@@ -412,7 +412,11 @@ function setSplit(pct) {
   splitPct = Math.max(10, Math.min(90, pct))
   document.getElementById('map-5ct').style.width = splitPct + '%'
   document.getElementById('compare-slider').style.left = splitPct + '%'
-  if (map5ct) map5ct.resize()
+  document.getElementById('map').style.left = splitPct + '%'
+  requestAnimationFrame(() => {
+    if (map5ct) map5ct.resize()
+    map.resize()
+  })
 }
 
 async function initCompareMap() {
@@ -487,9 +491,9 @@ async function toggleCompare() {
     document.getElementById('label-h3').style.display = 'block'
     document.getElementById('compare-legend').style.display = 'block'
     wrap.classList.add('compare-active')
-    setSplit(50)
     render5ctLegend()
     await initCompareMap()
+    setSplit(50)
   } else {
     splitBtn.textContent = '⊟ Split'
     splitBtn.classList.remove('active')
@@ -499,6 +503,8 @@ async function toggleCompare() {
     document.getElementById('label-h3').style.display = 'none'
     document.getElementById('compare-legend').style.display = 'none'
     wrap.classList.remove('compare-active')
+    document.getElementById('map').style.left = '0'
+    requestAnimationFrame(() => map.resize())
     // Restore whatever layer was active before
     switchField(activeField)
   }
